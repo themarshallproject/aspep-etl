@@ -7,6 +7,9 @@ name = "pypi"
 dagster = "*"
 bs4 = "*"
 dagster-webserver = "*"
+pandas = "*"
+openpyxl = "*"
+xlrd = "*"
 
 [dev-packages]
 

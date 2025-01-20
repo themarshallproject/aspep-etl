@@ -1,8 +1,8 @@
+import json
 import pytest
 import requests
 from dagster import materialize, build_op_context
 from unittest.mock import patch, Mock
-
 
 @pytest.mark.network
 def test_get_census_url():
@@ -11,58 +11,54 @@ def test_get_census_url():
     """
     from process_aspep.assets import _get_census_url
 
-    # Create a mock context with a simple log.info implementation
     mock_context = Mock()
-    mock_context.log.info = print  # Replace this with more sophisticated logging if needed
+    mock_context.log.info = print  # Simple mock logger
 
     missing_pages = []
     for year in range(2000, 2024):
         url = _get_census_url(year, mock_context)
-        response = requests.head(url)  # Use HEAD to reduce payload
+        response = requests.head(url)  # Use HEAD for efficiency
         if response.status_code != 200:
             missing_pages.append((year, url))
 
-    # Assert no pages are missing
     assert not missing_pages, f"Pages missing for years: {missing_pages}"
 
 
-def test_scrape_data():
-    from process_aspep.assets import scrape_data
+def test_scrape_and_export_data_urls(tmp_path):
+    """
+    Test the combined scrape and export asset.
+    """
+    from process_aspep.assets import scrape_and_export_data_urls
 
     # Mock requests.get
     with patch("requests.get") as mock_get:
-        # Define mock behavior for the request
         def mock_response(url, *args, **kwargs):
             if url.startswith("https://www.census.gov/programs-surveys"):
                 year = url.split("/")[-1].split(".")[0]
             else:
                 year = url.split("/")[5]
 
-            year = int(year)
             if year == 2017:
-                # Special case: Alternate filename
-                mock_html = f"""
+                mock_html = """
                 <html>
                     <body>
-                        <a href="https://www.census.gov/data{year}/DifferingFilename.xlsx">
+                        <a href="https://www.census.gov/data2017/DifferingFilename.xlsx">
                             State and Local Government Employment Data
                         </a>
                     </body>
                 </html>
                 """
             elif year == 2018:
-                # Special case: Alternate link text and filename
-                mock_html = f"""
+                mock_html = """
                 <html>
                     <body>
-                        <a href="/data/{year}/DifferingFilename.xlsx">
+                        <a href="/data/2018/DifferingFilename.xlsx">
                             State and Local Government Employment & Payroll Data
                         </a>
                     </body>
                 </html>
                 """
             else:
-                # Standard case: Regular link text
                 mock_html = f"""
                 <html>
                     <body>
@@ -72,45 +68,50 @@ def test_scrape_data():
                     </body>
                 </html>
                 """
-    
             return Mock(status_code=200, text=mock_html)
 
         mock_get.side_effect = mock_response
 
+        # Mock context with output path
+        output_file = tmp_path / "year_url_mapping.json"
+        context = build_op_context(resources={"output_paths": {"year_url_mapping": str(output_file)}})
+
         # Execute the asset
-        result = materialize([scrape_data])
+        result = scrape_and_export_data_urls(context)
 
-        # Validate results
-        scraped_data = result.output_for_node("scrape_data")
-
-        # Verify the total number of years
-        assert len(scraped_data) == 24  # 24 years
-
-        # Validate URLs for each year
+        # Validate the dictionary output
+        assert len(result) == 24  # 24 years
         for year in range(2000, 2024):
             if year == 2017:
-                assert scraped_data[year] == "https://www.census.gov/data2017/DifferingFilename.xlsx"
+                assert result[year] == "https://www.census.gov/data2017/DifferingFilename.xlsx"
             elif year == 2018:
-                assert scraped_data[year] == "https://www.census.gov/data/2018/DifferingFilename.xlsx"
+                assert result[year] == "https://www.census.gov/data/2018/DifferingFilename.xlsx"
             else:
-                assert scraped_data[year] == f"https://www2.census.gov/data/{year}/State-and-Local-Government-Employment-Data.xls"
+                assert result[year] == f"https://www2.census.gov/data/{year}/State-and-Local-Government-Employment-Data.xls"
+
+        # Validate the JSON output
+        with open(output_file, "r") as file:
+            output = json.load(file)
+
+        assert len(output.values()) == 24
+        for year in range(2000, 2024):
+            assert output[year] == result[year]
 
 
-def test_export_to_csv(tmp_path):
-    from process_aspep.assets import export_to_csv
-    
-    # Mock scrape_data output
-    mock_scrape_data = {year: f"https://example.com/{year}" for year in range(2000, 2024)}
+@pytest.mark.parametrize("year", [2017, 2018, 2020])
+def test_special_case_urls(year):
+    """
+    Test special cases for certain years to ensure correct URL generation.
+    """
+    from process_aspep.assets import _get_census_url
 
-    # Use `build_op_context` with temporary path
-    output_file = tmp_path / "year_url_mapping.csv"
-    context = build_op_context(resources={"output_paths": {"csv_output": str(output_file)}})
+    mock_context = Mock()
+    mock_context.log.info = print
 
-    # Run the asset
-    export_to_csv(context=context, scrape_data=mock_scrape_data)
-
-    # Verify the CSV
-    with open(output_file, "r") as file:
-        lines = file.readlines()
-    assert lines[0].strip() == "Year,URL"
-    assert len(lines) == 25
+    url = _get_census_url(year, mock_context)
+    if year == 2017:
+        assert url == "https://www.census.gov/data/tables/2017/econ/apes/annual-apes.html"
+    elif year == 2018:
+        assert url == "https://www.census.gov/data/tables/2018/econ/apes/annual-apes.html"
+    else:
+        assert url == f"https://www.census.gov/programs-surveys/apes/data/datasetstables/{year}.html"
