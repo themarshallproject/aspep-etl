@@ -5,6 +5,8 @@ import requests
 from bs4 import BeautifulSoup
 from dagster import asset, MetadataValue
 from io import BytesIO
+from us import states
+
 
 def _get_census_url(year, context):
     """
@@ -64,19 +66,61 @@ def scrape_and_export_data_urls(context) -> dict:
 
     return year_url_mapping
 
-
 @asset(description="Combine all years of data.")
 def combine_years(context, scrape_and_export_data_urls: dict):
     data_urls = scrape_and_export_data_urls
 
-    # Column definitions for uniform formatting
-    column_names = [
-        "state", "gov_function", "ft_employment", "ft_pay",
-        "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-    ]
-
     # Initialize an empty DataFrame to accumulate results
     combined_data = pd.DataFrame()
+
+    # List to keep track of bad files
+    bad_files = []
+
+    # Helper function to extract headers dynamically
+    def extract_headers(df):
+        import re
+
+        # Locate the row with "State" in the first column
+        state_row_idx = df[df[0].str.strip() == "State"].index[0]
+
+        # Walk back to find the first empty row
+        empty_row_idx = None
+        for idx in range(state_row_idx, -1, -1):
+            if df.iloc[idx].isnull().all():
+                empty_row_idx = idx
+                break
+
+        if empty_row_idx is None:
+            raise ValueError("Could not find an empty row preceding the 'State' row.")
+
+        # Collect headers row by row starting after the empty row and include the 'State' row
+        header_rows = []
+        for idx in range(empty_row_idx + 1, state_row_idx + 1):
+            header_rows.append(df.iloc[idx])
+
+        # Flatten multi-row headers into a single header row
+        combined_headers = []
+        for col_idx in range(len(header_rows[0])):
+            if col_idx == 0:  # Skip processing for the zeroth column
+                combined_name = "State"
+            else:
+                combined_name = " ".join(
+                    str(row[col_idx]).strip() for row in header_rows if pd.notnull(row[col_idx])
+                )
+
+                # Prefix "Coefficient of variation (%)" columns with their left column name
+                if "coefficient of variation (%)" in combined_name.lower() and col_idx > 0:
+                    left_column_name = combined_headers[col_idx - 1]
+                    combined_name = f"{left_column_name} Coefficient of Variation (%)"
+
+            # Aggressively slugify column names and remove parentheses content
+            combined_name = re.sub(r"\([^)]*\)", "", combined_name)  # Remove text in parentheses
+            combined_name = re.sub(r"[^a-zA-Z0-9]+", "_", combined_name.strip()).lower()  # Slugify
+
+            combined_headers.append(combined_name)
+
+        context.log.debug(f"Extracted headers: {combined_headers}")
+        return combined_headers
 
     # Process each year and its corresponding URL
     for year, row in data_urls.items():
@@ -84,59 +128,83 @@ def combine_years(context, scrape_and_export_data_urls: dict):
 
         try:
             response.raise_for_status()
-        except:
-            context.log.warn(f"{url} didn't work.")
+        except requests.exceptions.RequestException as e:
+            context.log.warning(f"Failed to fetch {row['data_url']} for year {year}: {str(e)}")
+            bad_files.append({"year": year, "url": row["data_url"], "reason": str(e)})
             continue
 
-        # response.raise_for_status()
-        # extension = os.path.splitext(url)[-1].lower()  # Get the file extension
-        
-        # engine = None
-        # if extension in ['.xls']:
-        #     engine = 'xlrd'
-        # elif extension in ['.xlsx']:
-        #     engine = 'openpyxl'
-        # else:
-        #     raise ValueError(f"Unsupported file extension: {extension}")
+        source_dir = os.path.join("data", "source")
+        os.makedirs(source_dir, exist_ok=True)
+        output_file_path = os.path.join(source_dir, f"{year}_source.xlsx")
+
+        with open(output_file_path, "wb") as f:
+            f.write(response.content)
 
         with BytesIO(response.content) as file:
-            # Guess row to skip based on known patterns
-            skiprows = 4 if int(year) <= 2006 else 14
+            try:
+                # Determine the file type based on the URL
+                if row["data_url"].endswith(".xls"):
+                    engine = "xlrd"
+                elif row["data_url"].endswith(".xlsx"):
+                    engine = "openpyxl"
+                else:
+                    raise ValueError(f"Unsupported file extension for {row['data_url']}")
 
-            # Read Excel file with the appropriate engine
-            df = pd.read_excel(file, skiprows=skiprows, engine="openpyxl")
+                # Read the raw Excel file without skipping rows
+                raw_df = pd.read_excel(file, engine=engine, header=None)
 
-            # Drop unnamed columns and rename for consistency
-            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-            df.columns = column_names[:len(df.columns)]
+                # Extract dynamic headers
+                headers = extract_headers(raw_df)
 
-            # Add the year column
-            df["year"] = int(year)
+                # Locate the actual data start row (row with "State")
+                data_start_idx = raw_df[raw_df[0].str.strip() == "State"].index[0] + 1
 
-            # Append to the combined DataFrame
-            combined_data = pd.concat([combined_data, df], ignore_index=True)
+                # Read the data portion
+                df = pd.read_excel(file, engine=engine, skiprows=data_start_idx, names=headers)
 
-    # Clean up columns
-    combined_data["gov_function"] = combined_data["gov_function"].str.strip().str.lower()
-    combined_data["state"] = combined_data["state"].str.strip().str.lower()
+                # Drop entirely blank rows
+                df.dropna(how="all", inplace=True)
 
-    # Dictionary replacements for standardization
-    state_dict = {
-        "us": "united states",
-        "al": "alabama",
-        "ak": "alaska",
-        # Add the rest of the states...
-    }
+                # Add the year column
+                df["year"] = int(year)
 
-    gov_function_dict = {
-        "total": "total - all government employment functions",
-        "financial admin": "financial administration",
-        # Add other mappings as necessary
-    }
+                # Append to the combined DataFrame
+                combined_data = pd.concat([combined_data, df], ignore_index=True)
 
-    combined_data.replace({"state": state_dict, "gov_function": gov_function_dict}, inplace=True)
+                context.log.info(f"processed {year} w columns {df.columns}")
+          
+            except Exception as e:
+                context.log.warning(f"Error processing file for year {year}: {str(e)}")
+                bad_files.append({"year": year, "url": row["data_url"], "reason": str(e)})
 
-    # Sort values
-    combined_data.sort_values(["state", "gov_function", "year"], inplace=True)
+    # Ensure "State" column exists before proceeding
+    if "state" in combined_data.columns:
+        combined_data.rename(columns=lambda x: x.strip(), inplace=True)
+
+        # Drop rows where "State" or other key columns are missing or invalid
+        combined_data = combined_data[combined_data["state"].notnull() & (combined_data["state"] != "")]
+
+        # Dictionary replacements for state standardization using a mapping
+        state_dict = {"us": "United States"}  # Add more mappings as needed
+        combined_data.replace({"state": state_dict}, inplace=True)
+    else:
+        context.log.error("Missing 'state' column in the combined data. Check headers and data structure.")
+
+    # Sort values if the DataFrame is not empty
+    if not combined_data.empty:
+        combined_data.sort_values(["state", "year"], inplace=True)
+
+    # Log bad files to the context and add as metadata
+    if bad_files:
+        context.log.warning(f"Encountered issues with {len(bad_files)} files.")
+        context.log.debug(f"Bad files: {bad_files}")
+        context.add_output_metadata({"bad_files": bad_files})
+
+    # Write combined data to a JSON file in the "out" directory
+    output_path = os.path.join("data/out", "combined_data.json")
+    os.makedirs("out", exist_ok=True)  # Ensure the "out" directory exists
+    combined_data.to_json(output_path, orient="records", lines=False, indent=4)
+    context.log.info(f"Combined data written to {output_path}")
+    context.add_output_metadata({"output_file": output_path})
 
     return combined_data
