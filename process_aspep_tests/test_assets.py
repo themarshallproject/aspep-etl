@@ -3,6 +3,7 @@ import pytest
 import requests
 from dagster import materialize, build_op_context
 from unittest.mock import patch, Mock
+from process_aspep.assets import START_YEAR, END_YEAR
 
 @pytest.mark.network
 def test_get_census_url():
@@ -15,7 +16,7 @@ def test_get_census_url():
     mock_context.log.info = print  # Simple mock logger
 
     missing_pages = []
-    for year in range(2000, 2024):
+    for year in range(START_YEAR, END_YEAR):
         url = _get_census_url(year, mock_context)
         response = requests.head(url)  # Use HEAD for efficiency
         if response.status_code != 200:
@@ -28,7 +29,7 @@ def test_scrape_and_export_data_urls(tmp_path):
     """
     Test the combined scrape and export asset.
     """
-    from process_aspep.assets import scrape_and_export_data_urls
+    from process_aspep.assets import scrape_and_export_aspep_urls
 
     # Mock requests.get
     with patch("requests.get") as mock_get:
@@ -43,7 +44,7 @@ def test_scrape_and_export_data_urls(tmp_path):
                 <html>
                     <body>
                         <a href="https://www.census.gov/data2017/DifferingFilename.xlsx">
-                            State and Local Government Employment Data
+                            State Government Employment & Payroll Data [<1.0mb]
                         </a>
                     </body>
                 </html>
@@ -53,7 +54,7 @@ def test_scrape_and_export_data_urls(tmp_path):
                 <html>
                     <body>
                         <a href="/data/2018/DifferingFilename.xlsx">
-                            State and Local Government Employment & Payroll Data
+                            State Government Employment & Payroll Data [<1.0mb]
                         </a>
                     </body>
                 </html>
@@ -63,7 +64,7 @@ def test_scrape_and_export_data_urls(tmp_path):
                 <html>
                     <body>
                         <a href="https://www2.census.gov/data/{year}/State-and-Local-Government-Employment-Data.xls">
-                            State and Local Government Employment Data
+                            State Government Employment & Payroll Data [<1.0mb]
                         </a>
                     </body>
                 </html>
@@ -77,11 +78,12 @@ def test_scrape_and_export_data_urls(tmp_path):
         context = build_op_context(resources={"output_paths": {"year_url_mapping": str(output_file)}})
 
         # Execute the asset
-        result = scrape_and_export_data_urls(context)
+        result = scrape_and_export_aspep_urls(context)
 
         # Validate the dictionary output
-        assert len(result) == 24  # 24 years
-        for year in range(2000, 2024):
+        assert len(result) == END_YEAR - START_YEAR  
+        
+        for year in range(START_YEAR, END_YEAR):
             if year == 2017:
                 assert result[year] == "https://www.census.gov/data2017/DifferingFilename.xlsx"
             elif year == 2018:
@@ -93,8 +95,8 @@ def test_scrape_and_export_data_urls(tmp_path):
         with open(output_file, "r") as file:
             output = json.load(file)
 
-        assert len(output.values()) == 24
-        for year in range(2000, 2024):
+        assert len(output.values()) == END_YEAR - START_YEAR
+        for year in range(START_YEAR, END_YEAR):
             assert output[year] == result[year]
 
 
@@ -109,9 +111,45 @@ def test_special_case_urls(year):
     mock_context.log.info = print
 
     url = _get_census_url(year, mock_context)
-    if year == 2017:
+    if year == 2014:
+        assert url == "https://www.census.gov/data/datasets/2014/econ/apes/annual-apes.html"
+    elif year == 2017:
         assert url == "https://www.census.gov/data/tables/2017/econ/apes/annual-apes.html"
     elif year == 2018:
         assert url == "https://www.census.gov/data/tables/2018/econ/apes/annual-apes.html"
     else:
         assert url == f"https://www.census.gov/programs-surveys/apes/data/datasetstables/{year}.html"
+
+
+# @pytest.mark.data
+# def test_washington_2002_other_employees(combined_data):
+#     """Check that 'total pay' for Washington in 2002 'other employees' is 94,544,728."""
+#     row = combined_data[
+#         (combined_data["state"] == "washington") &
+#         (combined_data["gov_function"] == "other employees") &
+#         (combined_data["year"] == 2002)
+#     ]
+    
+#     assert not row.empty, "Expected row for Washington 2002 'other employees' was not found."
+
+#     value = row["total_pay"].values[0]
+#     expected_value = 94_544_728
+
+#     assert value == expected_value, f"Expected {expected_value}, but got {value}"
+
+
+# @pytest.mark.data
+# def test_washington_2017_higher_ed_instructional(combined_data):
+#     """Check that 'total pay' for Washington in 2017 'higher education instructional' is 152,004,260."""
+#     row = combined_data[
+#         (combined_data["state"] == "washington") &
+#         (combined_data["gov_function"] == "education - higher education instructional") &
+#         (combined_data["year"] == 2017)
+#     ]
+    
+#     assert not row.empty, "Expected row for Washington 2017 'higher education instructional' was not found."
+
+#     value = row["total_pay"].values[0]
+#     expected_value = 152_004_260
+
+#     assert value == expected_value, f"Expected {expected_value}, but got {value}"

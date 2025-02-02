@@ -11,6 +11,8 @@ pandas = "*"
 openpyxl = "*"
 xlrd = "*"
 us = "*"
+boto3 = "*"
+dagster-aws = "*"
 
 [dev-packages]
 

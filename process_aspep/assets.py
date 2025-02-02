@@ -1,222 +1,108 @@
+import gzip
 import json
 import os
 import pandas as pd
+import re
 import requests
+import unicodedata
 from bs4 import BeautifulSoup
-from dagster import asset, MetadataValue
-from io import BytesIO
-from us import states
+from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from .config import ASPEP_DATA_CONFIG, COLUMN_MAP, GOV_FUNCTION_MAP, STATE_MAP
 
-START_YEAR = 2000
-END_YEAR = 2023
+PROCESSED_DIRECTORY = "data/out"
+BUCKET_NAME = "tmp-gfx-public-data"
+S3_PREFIX = "aspep"  # Target "directory" in S3
 
-data_config = {
-    2000: {
-        "skiprows": 4,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2001: {
-        "skiprows": 6,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2002: {
-        "skiprows": 4,
-        "drop_columns": ["Unnamed: 9"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2003: {
-        "skiprows": 4,
-        "drop_columns": ["Unnamed: 9"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2004: {
-        "skiprows": 4,
-        "drop_columns": ["Unnamed: 9"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2005: {
-        "skiprows": 4,
-        "drop_columns": ["Unnamed: 9"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2006: {
-        "skiprows": 4,
-        "drop_columns": ["Unnamed: 9"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_pay"
-        ]
-    },
-    2007: {
-        "skiprows": 12,
-        "drop_columns": ["Unnamed: 10"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2008: {
-        "skiprows": 11,
-        "drop_columns": ["Unnamed: 10"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2009: {
-        "skiprows": 12,
-        "drop_columns": ["Unnamed: 10"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2010: {
-        "skiprows": 13,
-        "drop_columns": ["Unnamed: 10"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2011: {
-        "skiprows": 13,
-        "drop_columns": ["Unnamed: 10"],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2012: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2013: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2014: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2015: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2016: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2017: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2018: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2019: {
-        "skiprows": 14,
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2020: {
-        "skiprows": 14,
-        "drop_columns": [
-            "Unnamed: 9", "Unnamed: 10", "Unnamed: 11", "Unnamed: 12",
-            "Unnamed: 13", "Unnamed: 14", "Unnamed: 15", "Unnamed: 16", "Unnamed: 17"
-        ],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2021: {
-        "skiprows": 14,
-        "drop_columns": [
-            "Unnamed: 9", "Unnamed: 10", "Unnamed: 11", "Unnamed: 12",
-            "Unnamed: 13", "Unnamed: 14", "Unnamed: 15", "Unnamed: 16", "Unnamed: 17"
-        ],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    },
-    2022: {
-        "skiprows": 14,
-        "drop_columns": [
-            "Unnamed: 9", "Unnamed: 10", "Unnamed: 11", "Unnamed: 12",
-            "Unnamed: 13", "Unnamed: 14", "Unnamed: 15", "Unnamed: 16", "Unnamed: 17"
-        ],
-        "columns": [
-            "state", "gov_function", "ft_employment", "ft_pay",
-            "pt_employment", "pt_pay", "ft_eq_employment", "total_employment", "total_pay"
-        ]
-    }
-}
-
-EXPECTED_COLUMNS = [
-    "state", "gov_function", "ft_employment", "ft_pay",
-    "pt_employment", "pt_pay", "pt_hour", "ft_eq_employment", "total_employment", "total_pay"
-]
+START_YEAR = 2003
+END_YEAR = 2024
 
 def _get_census_url(year, context):
     """
     Get the URL for a Census ASPEP download page.
     """
-    base_url = "https://www.census.gov/programs-surveys/apes/data/datasetstables/"
     if year == 2017 or year == 2018:
         url = f"https://www.census.gov/data/tables/{year}/econ/apes/annual-apes.html"
-        context.log.info(f"URL: {url} (special case for 2017 or 2018)")
+    elif year == 2014:
+        url = "https://www.census.gov/data/datasets/2014/econ/apes/annual-apes.html"
     else:
-        url = f"{base_url}{year}.html"
-        context.log.info(f"URL: {url}")
-
+        url = f"https://www.census.gov/programs-surveys/apes/data/datasetstables/{year}.html"
+    
+    context.log.info(f"Getting Census URL: {url} / year: {year}")
     return url
 
-@asset(description="Scrape URLs from Census website and export them to a JSON file.", required_resource_keys={"output_paths"})
-def scrape_and_export_data_urls(context) -> dict:
+
+def slugify(text):
+    """Convert text to a slug format, removing non-alphanumeric characters and normalizing Unicode."""
+    text = str(text)
+    text = re.sub(r'\s+', '_', text.strip())  # Replace spaces with underscores
+    text = re.sub(r'[^a-zA-Z0-9_]', '', text)  # Remove non-alphanumeric characters
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')  # Normalize Unicode
+    return text.lower()
+
+
+def extract_column_names(df, config):
+    """Extract column names from a given dataframe based on the configured header range."""
+    header_start = config.get("header_start", 0)
+    header_end = config.get("header_end", header_start + 2)
+    
+    raw_headers = df.iloc[header_start:header_end + 1].astype(str).replace("nan", "").agg(' '.join, axis=0)
+    cleaned_headers = [slugify(re.sub(r'\(.*?\)', '', col).strip()) for col in raw_headers]
+    
+    # Ensure the first column is always 'state'
+    if cleaned_headers:
+        cleaned_headers[0] = "state"
+        cleaned_headers[1] = "gov_function"
+    
+    return cleaned_headers
+
+
+def upload_file_to_s3(context, local_path, s3_key):
+    """
+    Upload a single file to S3 with public-read access.
+    
+    Args:
+        context (AssetExecutionContext): Dagster execution context.
+        local_path (str): The local file path to upload.
+        s3_key (str): The S3 key (path) to store the file under.
+
+    Returns:
+        str: Public URL of the uploaded file.
+    """
+    s3_client = context.resources.s3
+
+    try:
+        # Check if the file is a text-based format to gzip
+        is_text = local_path.endswith((".json", ".csv", ".txt"))
+        compressed_path = f"{local_path}.gz" if is_text else local_path
+
+        if is_text:
+            context.log.info(f"Gzipping: {local_path} -> {compressed_path}")
+            with open(local_path, "rb") as f_in, gzip.open(compressed_path, "wb") as f_out:
+                f_out.writelines(f_in)
+        
+        # Upload file with public-read ACL
+        extra_args = {"ACL": "public-read"}
+        if is_text:
+            extra_args.update({"ContentType": "text/plain", "ContentEncoding": "gzip"})
+        
+        s3_client.upload_file(compressed_path, BUCKET_NAME, s3_key, ExtraArgs=extra_args)
+        context.log.info(f"Uploaded {compressed_path} to s3://{BUCKET_NAME}/{s3_key}")
+
+        # Generate public URL
+        public_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
+        return public_url
+
+    except Exception as e:
+        context.log.error(f"Failed to upload {local_path} to S3: {e}")
+        return None
+
+
+@asset(
+    description="Scrape URLs from Census website and export them to a JSON file.",
+    required_resource_keys={"output_paths"},
+    group_name="download"
+)
+def scrape_and_export_aspep_urls(context) -> dict:
     """
     Scrape the Census website to find links for State and Local Government Employment Data
     and export the results to a JSON file.
@@ -236,7 +122,7 @@ def scrape_and_export_data_urls(context) -> dict:
         # Find all anchor tags and look for the one containing the desired text
         link = None
         for a_tag in soup.find_all('a'):
-            if "State Government Employment & Payroll" in a_tag.get_text(strip=True):
+            if "State Government Employment" in a_tag.get_text(strip=True):
                 link = a_tag
                 break
         
@@ -259,14 +145,17 @@ def scrape_and_export_data_urls(context) -> dict:
 
     return year_url_mapping
 
-@asset(description="Download Excel files for a specific year.")
-def get_data_for_year(context, scrape_and_export_data_urls: dict) -> dict:
+@asset(
+    description="Download Excel files for a specific year.",
+    group_name="download"
+)
+def download_aspep_year(context, scrape_and_export_aspep_urls: dict) -> dict:
     """
     Download Excel files for each year and store them locally.
     """
     downloaded_files = {}
 
-    for year, row in scrape_and_export_data_urls.items():
+    for year, row in scrape_and_export_aspep_urls.items():
         response = requests.get(row["data_url"])
 
         try:
@@ -276,8 +165,7 @@ def get_data_for_year(context, scrape_and_export_data_urls: dict) -> dict:
             continue
 
         file_extension = ".xlsx" if ".xlsx" in row["data_url"] else ".xls"
-        output_file = os.path.join("data/raw", f"data_{year}{file_extension}")
-        os.makedirs("data/raw", exist_ok=True)
+        output_file = os.path.join("data/raw", f"aspep_{year}{file_extension}")
 
         with open(output_file, "wb") as file:
             file.write(response.content)
@@ -289,47 +177,96 @@ def get_data_for_year(context, scrape_and_export_data_urls: dict) -> dict:
 
     return downloaded_files
 
-@asset(description="Combine all years of data.")
-def combine_years(context, get_data_for_year: dict):
-    combined_data = pd.DataFrame(columns=EXPECTED_COLUMNS)
+
+@asset(
+    description="Combine all years of data.",
+    required_resource_keys={"output_paths"},
+    group_name="process"
+)
+def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
+    combined_data = pd.DataFrame()
     bad_files = []
 
-    for year, file_path in get_data_for_year.items():
+    items = [(year, file_path) for year, file_path in download_aspep_year.items() if year >= START_YEAR and year < END_YEAR]
+
+    for year, file_path in items:
         try:
             engine = "openpyxl" if file_path.endswith(".xlsx") else "xlrd"
-            config = data_config.get(year, {})
+            config = ASPEP_DATA_CONFIG.get(year, {})
 
-            raw_df = pd.read_excel(file_path, engine=engine, skiprows=config.get("skiprows", 0), header=None)
+            raw_df = pd.read_excel(file_path, engine=engine, header=None)
+            
+            # Extract column names using the header range
+            new_columns = extract_column_names(raw_df, config)
+            raw_df.columns = new_columns
+            
+            # Drop the header rows since we extracted column names from them
+            raw_df = raw_df.iloc[config["header_end"]:].reset_index(drop=True)
+            
+            # Drop any completely empty columns and column named ""
+            raw_df = raw_df.dropna(axis=1, how='all')
+            if "" in raw_df.columns:
+                raw_df = raw_df.drop(columns=[""])
 
-            if "drop_columns" in config:
-                raw_df.drop(columns=config["drop_columns"], errors="ignore", inplace=True)
-
-            raw_df.columns = config.get("columns", raw_df.columns)
-
-            raw_df = raw_df.reindex(columns=EXPECTED_COLUMNS)
+            # Map slugified columns to expected common names (if applicable)
+            raw_df.rename(columns=COLUMN_MAP, inplace=True)
+            
             raw_df["year"] = year
+            
+            raw_df["state"] = raw_df["state"].str.strip()
+            raw_df["state"] = raw_df["state"].str.lower()
+
+            raw_df["gov_function"] = raw_df["gov_function"].str.strip()
+            raw_df["gov_function"] = raw_df["gov_function"].str.lower()
+
+            raw_df = raw_df.replace({"state": STATE_MAP, "gov_function": GOV_FUNCTION_MAP}).reset_index()
 
             combined_data = pd.concat([combined_data, raw_df], ignore_index=True)
 
             context.log.info(f"Processed year {year} with columns: {raw_df.columns.tolist()}")
-
+        
         except Exception as e:
             context.log.warning(f"Error processing file for year {year}: {str(e)}")
+            context.log.info(f"bad columns {raw_df.columns}")
             bad_files.append({"year": year, "file": file_path, "reason": str(e)})
 
+    if combined_data.index.duplicated().any():
+        context.log.warning(f"Non-unique index detected: {combined_data.index[combined_data.index.duplicated()].tolist()}")
+
+    # Ensure 'state' column is present and clean up
     if "state" in combined_data.columns:
         combined_data = combined_data[combined_data["state"].notnull() & (combined_data["state"] != "")]
-        combined_data.sort_values(["state", "year"], inplace=True)
+        combined_data.sort_values(["state", "year", "gov_function"], inplace=True)
 
-    if not combined_data.empty:
-        output_path = os.path.join("data/out", "combined_data.json")
-        os.makedirs("data/out", exist_ok=True)
-        combined_data.to_json(output_path, orient="records", lines=False, indent=4)
-        context.log.info(f"Combined data written to {output_path}")
-        context.add_output_metadata({"output_file": output_path})
-
+    output_path = context.resources.output_paths["combined_data"]
+    combined_data.to_json(output_path, orient="records", lines=False, indent=4)
+    context.log.info(f"Combined data written to {output_path}")
+    context.add_output_metadata({"output_file": output_path})
+    
     if bad_files:
         context.log.warning(f"Encountered issues with {len(bad_files)} files.")
         context.add_output_metadata({"bad_files": bad_files})
-
+    
     return combined_data
+
+
+@asset(
+    required_resource_keys={"s3"},
+    description="Upload all files from 'data/out' to a public s3 bucket.",
+    group_name="process"
+)
+def s3_upload(context: AssetExecutionContext, combine_years: pd.DataFrame) -> Output[list]:
+    uploaded_files = []
+    for root, _, files in os.walk(PROCESSED_DIRECTORY):
+        for filename in files:
+            local_path = os.path.join(root, filename)
+            s3_key = os.path.join(S3_PREFIX, os.path.relpath(local_path, PROCESSED_DIRECTORY))
+            s3_key = s3_key.replace("\\", "/")  # Ensure consistent path formatting
+
+            public_url = upload_file_to_s3(context, local_path, s3_key)
+            if public_url:
+                uploaded_files.append({"file": filename, "url": public_url})
+
+    return Output(value=uploaded_files, metadata={
+        "uploaded_files": MetadataValue.json(uploaded_files),
+    })
