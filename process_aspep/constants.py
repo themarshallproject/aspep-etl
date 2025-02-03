@@ -112,7 +112,7 @@ GOV_FUNCTION_MAP = {
     "liquor stores":"state liquor stores"
 }
 
-STATE_MAP = {
+STATE_CODE_MAP = {
     "us":"united states",
     "al":"alabama",
     "ak":"alaska",
@@ -165,3 +165,5 @@ STATE_MAP = {
     "wi":"wisconsin",
     "wy":"wyoming"
 }
+
+STATE_MAP = {v: k.upper() for k, v in STATE_CODE_MAP.items()}

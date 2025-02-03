@@ -10,7 +10,6 @@ dagster-webserver = "*"
 pandas = "*"
 openpyxl = "*"
 xlrd = "*"
-us = "*"
 boto3 = "*"
 dagster-aws = "*"
 

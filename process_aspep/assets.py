@@ -1,5 +1,6 @@
 import gzip
 import json
+import numpy as np
 import os
 import pandas as pd
 import re
@@ -7,7 +8,7 @@ import requests
 import unicodedata
 from bs4 import BeautifulSoup
 from dagster import asset, AssetExecutionContext, Output, MetadataValue
-from .config import ASPEP_DATA_CONFIG, COLUMN_MAP, GOV_FUNCTION_MAP, STATE_MAP
+from .constants import ASPEP_DATA_CONFIG, COLUMN_MAP, GOV_FUNCTION_MAP, STATE_MAP
 
 PROCESSED_DIRECTORY = "data/out"
 BUCKET_NAME = "tmp-gfx-public-data"
@@ -29,6 +30,13 @@ def _get_census_url(year, context):
     
     context.log.info(f"Getting Census URL: {url} / year: {year}")
     return url
+
+
+def classify_state_scope(state_code):
+    """Classify national level or state level"""
+    if state_code == "US":
+        return "national"
+    return "state"
 
 
 def slugify(text):
@@ -54,6 +62,14 @@ def extract_column_names(df, config):
         cleaned_headers[1] = "gov_function"
     
     return cleaned_headers
+
+
+def get_state_census_groups(state_code):
+    """Ensure a three-element list is always returned from the mapping of state code to census regions."""
+    mapping = state_to_census_groups.get(state_code, None)
+    if isinstance(mapping, dict):
+        return [mapping.get('State'), mapping.get('Region'), mapping.get('Division')]
+    return [state_code, None, None]  # Default for missing mappings
 
 
 def upload_file_to_s3(context, local_path, s3_key):
@@ -178,12 +194,31 @@ def download_aspep_year(context, scrape_and_export_aspep_urls: dict) -> dict:
     return downloaded_files
 
 
+
+@asset(
+    description="Get Census region and divsion mapping.",
+    group_name="download"
+)
+def state_to_census_groups(context) -> Output[dict]:
+    # Load census region dataset
+    census_region_df = pd.read_csv('https://raw.githubusercontent.com/cphalpert/census-regions/master/us%20census%20bureau%20regions%20and%20divisions.csv')
+
+    state_to_census_group_dict = census_region_df.set_index('State Code')[['State', 'Region', 'Division']].to_dict(orient="index")
+    # Create a dictionary for quick lookup
+    return Output(
+        value=state_to_census_group_dict,
+        metadata={
+            "preview": state_to_census_group_dict["WA"]
+        }
+    )
+
+
 @asset(
     description="Combine all years of data.",
     required_resource_keys={"output_paths"},
     group_name="process"
 )
-def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
+def combine_years(context, download_aspep_year: dict, state_to_census_groups: dict) -> pd.DataFrame:
     combined_data = pd.DataFrame()
     bad_files = []
 
@@ -213,14 +248,18 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
             
             raw_df["year"] = year
             
-            raw_df["state"] = raw_df["state"].str.strip()
-            raw_df["state"] = raw_df["state"].str.lower()
-
             raw_df["gov_function"] = raw_df["gov_function"].str.strip()
             raw_df["gov_function"] = raw_df["gov_function"].str.lower()
-
+            
+            raw_df["state"] = raw_df["state"].str.strip()
+            raw_df["state"] = raw_df["state"].str.lower()
             raw_df = raw_df.replace({"state": STATE_MAP, "gov_function": GOV_FUNCTION_MAP}).reset_index()
+            raw_df["state code"] = raw_df["state"].str.upper()
 
+            state_groups = raw_df['state code'].apply(get_state_census_groups)
+            raw_df[['state', 'region', 'division']] = pd.DataFrame(state_groups.tolist(), index=raw_df.index)
+            raw_df['state_scope'] = raw_df['state code'].apply(classify_state_scope)
+ 
             combined_data = pd.concat([combined_data, raw_df], ignore_index=True)
 
             context.log.info(f"Processed year {year} with columns: {raw_df.columns.tolist()}")
@@ -270,3 +309,56 @@ def s3_upload(context: AssetExecutionContext, combine_years: pd.DataFrame) -> Ou
     return Output(value=uploaded_files, metadata={
         "uploaded_files": MetadataValue.json(uploaded_files),
     })
+
+import pandas as pd
+import numpy as np
+
+@asset(
+    description="Derive pay metrics and add nationwide statistics.",
+    required_resource_keys={"output_paths"},
+    group_name="process",
+    deps=[combine_years]
+)
+def derive_stats(context, combine_years: pd.DataFrame) -> pd.DataFrame:
+    derived_data = combine_years.copy()
+    
+    # Ensure numeric types
+    numeric_cols = ["total_pay", "ft_eq_employment", "pt_pay", "pt_hour", "ft_pay", "ft_employment"]
+    for col in numeric_cols:
+        derived_data[col] = pd.to_numeric(derived_data[col], errors='coerce')
+    
+    # Compute derived metrics, avoiding division by zero
+    derived_data["pay_per_fte"] = derived_data["total_pay"].div(derived_data["ft_eq_employment"].replace(0, np.nan))
+    derived_data["pay_per_pt_hour"] = derived_data["pt_pay"].div(derived_data["pt_hour"].replace(0, np.nan))
+    derived_data["pay_per_ft"] = derived_data["ft_pay"].div(derived_data["ft_employment"].replace(0, np.nan))
+    
+    # Handle potential division by zero
+    derived_data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    # Filter out nationwide sum (US state code)
+    state_filtered_data = derived_data[derived_data["state code"] != "US"]
+    
+    # Identify strictly numeric columns for statistics
+    exclude_cols = ['index', 'state', 'gov_function', 'state code', 'region', 'division', 'state_scope', 'year']
+    stat_columns = [col for col in derived_data.columns if col not in exclude_cols and pd.api.types.is_numeric_dtype(derived_data[col])]
+    
+    # Compute descriptive statistics grouped by year and gov_function
+    grouped_stats = state_filtered_data.groupby(["year", "gov_function"])[stat_columns].agg(['median', 'mean'])
+    grouped_stats.columns = ['_'.join(col).strip() for col in grouped_stats.columns.values]
+    grouped_stats = grouped_stats.reset_index()
+    
+    # Add a special state identifier
+    grouped_stats.insert(0, "state code", "US-mean")
+    grouped_stats.insert(1, "state_scope", "stats")
+    
+    # Append the stats to the dataset
+    derived_data = pd.concat([derived_data, grouped_stats], ignore_index=True)
+    
+    # Save the derived dataset
+    output_path = context.resources.output_paths["derived_pay_metrics"]
+    derived_data.to_json(output_path, orient="records", lines=False, indent=4)
+    
+    context.log.info(f"Derived pay metrics with statistics written to {output_path}")
+    context.add_output_metadata({"output_file": output_path})
+    
+    return derived_data

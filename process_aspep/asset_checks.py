@@ -11,14 +11,14 @@ def load_combined_data():
 
 # List of asset checks to generate
 CHECKS = [
-    ("wisconsin", "corrections", 2017, "total_pay", 42_327_514),
-    ("wisconsin", "education - higher education instructional", 2021, "total_pay", 88_769_896),
-    ("arkansas", "judicial and legal", 2022, "ft_pay", 8_001_374),
-    ("california", "hospitals", 2022, "pt_employment", 10_250),
-    ("georgia", "public welfare", 2020, "pt_pay", 17_900),
-    ("indiana", "police protection total", 2020, "ft_eq_employment", 1_820),
-    ("united states", "total - all government employment functions", 2019, "ft_pt_employment", 5_497_394),
-    ("hawaii", "financial administration", 2018, "ft_employment", 692),
+    ("WI", "corrections", 2017, "total_pay", 42_327_514),
+    ("WI", "education - higher education instructional", 2021, "total_pay", 88_769_896),
+    ("AR", "judicial and legal", 2022, "ft_pay", 8_001_374),
+    ("CA", "hospitals", 2022, "pt_employment", 10_250),
+    ("GA", "public welfare", 2020, "pt_pay", 17_900),
+    ("IN", "police protection total", 2020, "ft_eq_employment", 1_820),
+    ("US", "total - all government employment functions", 2019, "ft_pt_employment", 5_497_394),
+    ("HI", "financial administration", 2018, "ft_employment", 692),
 ]
 
 
@@ -30,7 +30,7 @@ def create_asset_check(state, gov_function, year, column, expected_value):
     def check_fn():
         df = load_combined_data()
         row = df[
-            (df["state"] == state) &
+            (df["state code"] == state) &
             (df["gov_function"] == gov_function) &
             (df["year"] == year)
         ]
@@ -41,7 +41,7 @@ def create_asset_check(state, gov_function, year, column, expected_value):
                 metadata={"reason": "Row not found", "expected": expected_value}
             )
 
-        actual_value = row[column].values[0]
+        actual_value = int(row[column].values[0])
 
         return AssetCheckResult(
             passed=actual_value == expected_value,
