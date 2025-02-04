@@ -1,6 +1,6 @@
 from dagster import Definitions
-from process_aspep.assets import scrape_and_export_aspep_urls, download_aspep_year, combine_years, s3_upload, state_to_census_groups, derive_stats
-from process_aspep.resources import output_paths_resource
+from process_aspep.assets import scrape_and_export_aspep_urls, download_aspep_year, combine_years, s3_upload, derive_stats
+from process_aspep.resources import output_paths_resource, state_to_census_groups
 from dagster_aws.s3 import s3_resource
 from .asset_checks import asset_checks
 
@@ -20,7 +20,7 @@ output_paths = output_paths_resource.configured({
 })
 
 defs = Definitions(
-    assets=[scrape_and_export_aspep_urls, download_aspep_year, combine_years, s3_upload, state_to_census_groups, derive_stats],
+    assets=[scrape_and_export_aspep_urls, download_aspep_year, combine_years, s3_upload, derive_stats],
     asset_checks=asset_checks,
-    resources={"output_paths": output_paths, "s3": s3},
+    resources={"output_paths": output_paths, "s3": s3, "state_to_census_groups": state_to_census_groups},
 )

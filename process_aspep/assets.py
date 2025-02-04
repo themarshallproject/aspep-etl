@@ -161,64 +161,54 @@ def scrape_and_export_aspep_urls(context) -> dict:
 
     return year_url_mapping
 
+
 @asset(
-    description="Download Excel files for a specific year.",
+    description="Download Excel files for a specific year, but skip if cached.",
     group_name="download"
 )
 def download_aspep_year(context, scrape_and_export_aspep_urls: dict) -> dict:
     """
-    Download Excel files for each year and store them locally.
+    Download Excel files for each year if not already cached.
     """
     downloaded_files = {}
 
     for year, row in scrape_and_export_aspep_urls.items():
-        response = requests.get(row["data_url"])
-
-        try:
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            context.log.warning(f"Failed to fetch {row['data_url']} for year {year}: {str(e)}")
-            continue
-
         file_extension = ".xlsx" if ".xlsx" in row["data_url"] else ".xls"
         output_file = os.path.join("data/raw", f"aspep_{year}{file_extension}")
 
-        with open(output_file, "wb") as file:
-            file.write(response.content)
+        # Check if file already exists
+        if os.path.exists(output_file):
+            context.log.info(f"File for year {year} already exists at {output_file}, skipping download.")
+            downloaded_files[year] = output_file
+            continue
 
-        downloaded_files[year] = output_file
-        context.log.info(f"Downloaded file for year {year} to {output_file}")
+        # Try downloading if not cached
+        try:
+            response = requests.get(row["data_url"])
+            response.raise_for_status()
+
+            with open(output_file, "wb") as file:
+                file.write(response.content)
+
+            downloaded_files[year] = output_file
+            context.log.info(f"Downloaded file for year {year} to {output_file}")
+
+        except requests.exceptions.RequestException as e:
+            context.log.warning(f"Failed to fetch {row['data_url']} for year {year}: {str(e)}")
 
     context.add_output_metadata({"total_downloaded": len(downloaded_files)})
 
     return downloaded_files
 
 
-
-@asset(
-    description="Get Census region and divsion mapping.",
-    group_name="download"
-)
-def state_to_census_groups(context) -> Output[dict]:
-    # Load census region dataset
-    census_region_df = pd.read_csv('https://raw.githubusercontent.com/cphalpert/census-regions/master/us%20census%20bureau%20regions%20and%20divisions.csv')
-
-    state_to_census_group_dict = census_region_df.set_index('State Code')[['State', 'Region', 'Division']].to_dict(orient="index")
-    # Create a dictionary for quick lookup
-    return Output(
-        value=state_to_census_group_dict,
-        metadata={
-            "preview": state_to_census_group_dict["WA"]
-        }
-    )
-
-
 @asset(
     description="Combine all years of data.",
-    required_resource_keys={"output_paths"},
+    required_resource_keys={"output_paths", "state_to_census_groups"},
     group_name="process"
 )
-def combine_years(context, download_aspep_year: dict, state_to_census_groups: dict) -> pd.DataFrame:
+def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
+    state_to_census_groups = context.resources.state_to_census_groups  # Get from resource
+
     combined_data = pd.DataFrame()
     bad_files = []
 
