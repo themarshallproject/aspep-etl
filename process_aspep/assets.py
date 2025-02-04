@@ -238,15 +238,12 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
             
             raw_df["year"] = year
             
-            raw_df["gov_function"] = raw_df["gov_function"].str.strip()
-            raw_df["gov_function"] = raw_df["gov_function"].str.lower()
-            
-            raw_df["state"] = raw_df["state"].str.strip()
-            raw_df["state"] = raw_df["state"].str.lower()
+            raw_df["gov_function"] = raw_df["gov_function"].str.strip().str.lower()
+            raw_df["state"] = raw_df["state"].str.strip().str.lower()
             raw_df = raw_df.replace({"state": STATE_MAP, "gov_function": GOV_FUNCTION_MAP}).reset_index()
             raw_df["state code"] = raw_df["state"].str.upper()
 
-            state_groups = raw_df['state code'].apply(get_state_census_groups)
+            state_groups = raw_df['state code'].apply(lambda code: state_to_census_groups.get(code, {}))
             raw_df[['state', 'region', 'division']] = pd.DataFrame(state_groups.tolist(), index=raw_df.index)
             raw_df['state_scope'] = raw_df['state code'].apply(classify_state_scope)
  
@@ -259,13 +256,7 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
             context.log.info(f"bad columns {raw_df.columns}")
             bad_files.append({"year": year, "file": file_path, "reason": str(e)})
 
-    if combined_data.index.duplicated().any():
-        context.log.warning(f"Non-unique index detected: {combined_data.index[combined_data.index.duplicated()].tolist()}")
-
-    # Ensure 'state' column is present and clean up
-    if "state" in combined_data.columns:
-        combined_data = combined_data[combined_data["state"].notnull() & (combined_data["state"] != "")]
-        combined_data.sort_values(["state", "year", "gov_function"], inplace=True)
+    combined_data.sort_values(["state", "year", "gov_function"], inplace=True)
 
     output_path = context.resources.output_paths["combined_data"]
     combined_data.to_json(output_path, orient="records", lines=False, indent=4)
@@ -278,30 +269,6 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
     
     return combined_data
 
-
-@asset(
-    required_resource_keys={"s3"},
-    description="Upload all files from 'data/out' to a public s3 bucket.",
-    group_name="process"
-)
-def s3_upload(context: AssetExecutionContext, combine_years: pd.DataFrame) -> Output[list]:
-    uploaded_files = []
-    for root, _, files in os.walk(PROCESSED_DIRECTORY):
-        for filename in files:
-            local_path = os.path.join(root, filename)
-            s3_key = os.path.join(S3_PREFIX, os.path.relpath(local_path, PROCESSED_DIRECTORY))
-            s3_key = s3_key.replace("\\", "/")  # Ensure consistent path formatting
-
-            public_url = upload_file_to_s3(context, local_path, s3_key)
-            if public_url:
-                uploaded_files.append({"file": filename, "url": public_url})
-
-    return Output(value=uploaded_files, metadata={
-        "uploaded_files": MetadataValue.json(uploaded_files),
-    })
-
-import pandas as pd
-import numpy as np
 
 @asset(
     description="Derive pay metrics and add nationwide statistics.",
@@ -332,23 +299,47 @@ def derive_stats(context, combine_years: pd.DataFrame) -> pd.DataFrame:
     exclude_cols = ['index', 'state', 'gov_function', 'state code', 'region', 'division', 'state_scope', 'year']
     stat_columns = [col for col in derived_data.columns if col not in exclude_cols and pd.api.types.is_numeric_dtype(derived_data[col])]
     
-    # Compute descriptive statistics grouped by year and gov_function
-    grouped_stats = state_filtered_data.groupby(["year", "gov_function"])[stat_columns].agg(['median', 'mean'])
-    grouped_stats.columns = ['_'.join(col).strip() for col in grouped_stats.columns.values]
-    grouped_stats = grouped_stats.reset_index()
+    # Compute mean and median grouped by year and gov_function
+    median_stats = state_filtered_data.groupby(["year", "gov_function"])[stat_columns].median().reset_index()
+    mean_stats = state_filtered_data.groupby(["year", "gov_function"])[stat_columns].mean().reset_index()
     
-    # Add a special state identifier
-    grouped_stats.insert(0, "state code", "US-mean")
-    grouped_stats.insert(1, "state_scope", "stats")
+    # Assign special state codes
+    median_stats.insert(0, "state code", "US-median")
+    median_stats.insert(1, "state_scope", "stats")
+    mean_stats.insert(0, "state code", "US-mean")
+    mean_stats.insert(1, "state_scope", "stats")
     
     # Append the stats to the dataset
-    derived_data = pd.concat([derived_data, grouped_stats], ignore_index=True)
+    derived_data = pd.concat([derived_data, median_stats, mean_stats], ignore_index=True)
     
     # Save the derived dataset
-    output_path = context.resources.output_paths["derived_pay_metrics"]
+    output_path = context.resources.output_paths["derived_stats"]
     derived_data.to_json(output_path, orient="records", lines=False, indent=4)
     
     context.log.info(f"Derived pay metrics with statistics written to {output_path}")
     context.add_output_metadata({"output_file": output_path})
     
     return derived_data
+
+
+@asset(
+    required_resource_keys={"s3"},
+    description="Upload all files from 'data/out' to a public s3 bucket.",
+    group_name="process",
+    deps=[combine_years, derive_stats]
+)
+def s3_upload(context: AssetExecutionContext) -> Output[list]:
+    uploaded_files = []
+    for root, _, files in os.walk(PROCESSED_DIRECTORY):
+        for filename in files:
+            local_path = os.path.join(root, filename)
+            s3_key = os.path.join(S3_PREFIX, os.path.relpath(local_path, PROCESSED_DIRECTORY))
+            s3_key = s3_key.replace("\\", "/")  # Ensure consistent path formatting
+
+            public_url = upload_file_to_s3(context, local_path, s3_key)
+            if public_url:
+                uploaded_files.append({"file": filename, "url": public_url})
+
+    return Output(value=uploaded_files, metadata={
+        "uploaded_files": MetadataValue.json(uploaded_files),
+    })
