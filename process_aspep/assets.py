@@ -11,7 +11,7 @@ from dagster import asset, AssetExecutionContext, Output, MetadataValue
 from .constants import ASPEP_DATA_CONFIG, COLUMN_MAP, GOV_FUNCTION_MAP, STATE_MAP
 
 PROCESSED_DIRECTORY = "data/out"
-BUCKET_NAME = "tmp-gfx-public-data"
+BUCKET_NAME = os.environ.get("BUCKET_NAME", "")
 S3_PREFIX = "aspep"  # Target "directory" in S3
 
 START_YEAR = 2003
