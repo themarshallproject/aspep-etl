@@ -1,0 +1,109 @@
+{
+    "data": {
+        "2003": {
+            "year": 2003,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2003.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2003/annual-apes/03stall.xls"
+        },
+        "2004": {
+            "year": 2004,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2004.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2004/annual-apes/04stall.xls"
+        },
+        "2005": {
+            "year": 2005,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2005.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2005/annual-apes/05stall.xls"
+        },
+        "2006": {
+            "year": 2006,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2006.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2006/annual-apes/06stall.xls"
+        },
+        "2007": {
+            "year": 2007,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2007.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2007/annual-apes/07stall.xls"
+        },
+        "2008": {
+            "year": 2008,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2008.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2008/annual-apes/08stall.xls"
+        },
+        "2009": {
+            "year": 2009,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2009.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2009/annual-apes/09stall.xls"
+        },
+        "2010": {
+            "year": 2010,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2010.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2010/annual-apes/10stall.xls"
+        },
+        "2011": {
+            "year": 2011,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2011.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/tables/2011/annual-apes/11stall.xls"
+        },
+        "2012": {
+            "year": 2012,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2012.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2012/annual-apes/2012_state.xls"
+        },
+        "2013": {
+            "year": 2013,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2013.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2013/annual-apes/2013_state.xls"
+        },
+        "2014": {
+            "year": 2014,
+            "source_url": "https://www.census.gov/data/datasets/2014/econ/apes/annual-apes.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2014/annual-apes/2014_state.xls"
+        },
+        "2015": {
+            "year": 2015,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2015.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2015/annual-apes/2015_state.xls"
+        },
+        "2016": {
+            "year": 2016,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2016.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2016/annual-apes/2016_state.xls"
+        },
+        "2017": {
+            "year": 2017,
+            "source_url": "https://www.census.gov/data/tables/2017/econ/apes/annual-apes.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2017/2017_state.xls"
+        },
+        "2018": {
+            "year": 2018,
+            "source_url": "https://www.census.gov/data/tables/2018/econ/apes/annual-apes.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2018/2018_state.xls"
+        },
+        "2019": {
+            "year": 2019,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2019.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2019/2019_state.xls"
+        },
+        "2020": {
+            "year": 2020,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2020.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2020/2020_state.xlsx"
+        },
+        "2021": {
+            "year": 2021,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2021.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2021/2021_state.xlsx"
+        },
+        "2022": {
+            "year": 2022,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2022.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2022/2022_state.xlsx"
+        },
+        "2023": {
+            "year": 2023,
+            "source_url": "https://www.census.gov/programs-surveys/apes/data/datasetstables/2023.html",
+            "data_url": "https://www2.census.gov/programs-surveys/apes/datasets/2023/2023_state.xlsx"
+        }
+    }
+}
