@@ -120,12 +120,27 @@ def upload_file_to_s3(context, local_path, s3_key):
 )
 def scrape_and_export_aspep_urls(context) -> dict:
     """
-    Scrape the Census website to find links for State and Local Government Employment Data
-    and export the results to a JSON file.
+    Scrape the Census website to find links for State and Local Government Employment Data.
+    If a cached year_url_mapping.json exists, use it instead of re-scraping.
     """
+    mapping_file = context.resources.output_paths["year_url_mapping"]
     year_url_mapping = {}
 
+    # Check if the mapping file already exists
+    if os.path.exists(mapping_file):
+        try:
+            with open(mapping_file, "r") as f:
+                year_url_mapping = json.load(f).get("data", {})
+                context.log.info(f"Loaded existing year_url_mapping.json with {len(year_url_mapping)} entries.")
+                return year_url_mapping  # Use cached mapping
+        except (json.JSONDecodeError, KeyError) as e:
+            context.log.warning(f"Failed to read {mapping_file}, re-scraping: {e}")
+
+    # Otherwise, scrape URLs from Census website
     for year in range(START_YEAR, END_YEAR + 1):
+        if year in year_url_mapping:  # Skip if already cached
+            continue
+
         url = _get_census_url(year, context)
         response = requests.get(url)
 
@@ -134,29 +149,28 @@ def scrape_and_export_aspep_urls(context) -> dict:
             continue
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        
+
         # Find all anchor tags and look for the one containing the desired text
         link = None
         for a_tag in soup.find_all('a'):
             if "State Government Employment" in a_tag.get_text(strip=True):
                 link = a_tag
                 break
-        
+
         if link and link.get('href'):
             full_url = link['href']
             year_url_mapping[year] = {"year": year, "source_url": url, "data_url": full_url}
         else:
             context.log.warning(f"No matching link found for year {year}")
 
-    # Export to JSON
-    output_file = context.resources.output_paths["year_url_mapping"]
-    with open(output_file, mode="w") as file:
+    # Export updated mapping to JSON
+    with open(mapping_file, mode="w") as file:
         json.dump({"data": year_url_mapping}, file, indent=4)
 
-    context.log.info(f"JSON exported to {output_file}")
+    context.log.info(f"JSON exported to {mapping_file}")
     context.add_output_metadata({
-        "total_years": len(year_url_mapping.values()),
-        "output_file": MetadataValue.path(output_file),
+        "total_years": len(year_url_mapping),
+        "output_file": MetadataValue.path(mapping_file),
     })
 
     return year_url_mapping
@@ -212,12 +226,12 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
     combined_data = pd.DataFrame()
     bad_files = []
 
-    items = [(year, file_path) for year, file_path in download_aspep_year.items() if year >= START_YEAR and year < END_YEAR]
+    items = [(year, file_path) for year, file_path in download_aspep_year.items() if int(year) >= START_YEAR and int(year) < END_YEAR]
 
     for year, file_path in items:
         try:
             engine = "openpyxl" if file_path.endswith(".xlsx") else "xlrd"
-            config = ASPEP_DATA_CONFIG.get(year, {})
+            config = ASPEP_DATA_CONFIG.get(int(year), {})
 
             raw_df = pd.read_excel(file_path, engine=engine, header=None)
             
@@ -236,7 +250,7 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
             # Map slugified columns to expected common names (if applicable)
             raw_df.rename(columns=COLUMN_MAP, inplace=True)
             
-            raw_df["year"] = year
+            raw_df["year"] = int(year)
             
             raw_df["gov_function"] = raw_df["gov_function"].str.strip().str.lower()
             raw_df["state"] = raw_df["state"].str.strip().str.lower()
