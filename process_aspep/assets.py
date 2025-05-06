@@ -8,14 +8,14 @@ import requests
 import unicodedata
 from bs4 import BeautifulSoup
 from dagster import asset, AssetExecutionContext, Output, MetadataValue
-from .constants import ASPEP_DATA_CONFIG, COLUMN_MAP, GOV_FUNCTION_MAP, STATE_MAP
+from .constants import ASPEP_DATA_CONFIG, COLUMN_MAP, NEW_COLUMN_MAP_2024, GOV_FUNCTION_MAP, STATE_MAP, NUMERIC_COLS_2024
 
 PROCESSED_DIRECTORY = "data/out"
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "")
 S3_PREFIX = "aspep"  # Target "directory" in S3
 
 START_YEAR = 2003
-END_YEAR = 2024
+END_YEAR = 2025
 
 def _get_census_url(year, context):
     """
@@ -23,11 +23,11 @@ def _get_census_url(year, context):
     """
     if year == 2017 or year == 2018:
         url = f"https://www.census.gov/data/tables/{year}/econ/apes/annual-apes.html"
-    elif year == 2014:
-        url = "https://www.census.gov/data/datasets/2014/econ/apes/annual-apes.html"
+    elif year == 2014 or year == 2024:
+        url = f"https://www.census.gov/data/datasets/{year}/econ/apes/annual-apes.html"
     else:
         url = f"https://www.census.gov/programs-surveys/apes/data/datasetstables/{year}.html"
-    
+   
     context.log.info(f"Getting Census URL: {url} / year: {year}")
     return url
 
@@ -111,6 +111,58 @@ def upload_file_to_s3(context, local_path, s3_key):
     except Exception as e:
         context.log.error(f"Failed to upload {local_path} to S3: {e}")
         return None
+
+def legacy_extract_and_clean(raw_df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Handle classic ASPEP workbooks that use multi‑row column headers.
+
+    Steps:
+    1. Collapse header rows into a single‑line header using `extract_column_names()`.
+    2. Drop original header rows (`cfg["header_end"]`).
+    3. Strip all‑NaN and unnamed columns.
+    4. Normalize column names via `COLUMN_MAP` so downstream code sees canonical fields.
+    """
+    # 1. Derive flat column names
+    new_cols = extract_column_names(raw_df, cfg)
+    df = raw_df.copy()
+    df.columns = new_cols
+
+    # 2. Remove header rows beneath the new header line
+    df = df.iloc[cfg["header_end"] :].reset_index(drop=True)
+
+    # 3. Clean blank columns
+    df = df.dropna(axis=1, how="all")
+    if "" in df.columns:
+        df = df.drop(columns=[""])
+
+    # 4. Canonical rename mapping
+    df.rename(columns=COLUMN_MAP, inplace=True)
+    return df
+
+def api_based_extract_and_clean(raw_df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
+    """Process 2024+ files that already ship with flat headers.
+
+    1. Rename to canonical column names.
+    2. Drop columns we don't support yet.
+    3. Coerce numeric columns → float, coping with commas, Unicode minus, and ``(n)`` negatives.
+    """
+    df = (
+        raw_df.rename(columns=NEW_COLUMN_MAP_2024)
+            .loc[:, NEW_COLUMN_MAP_2024.values()]  # keep only mapped cols
+    )
+
+    # Clean + cast numeric columns
+    df[NUMERIC_COLS_2024] = (
+        df[NUMERIC_COLS_2024]
+            # → remove thousands separators, unify minus signs, (n) → -n
+            .replace({
+                r",": "",                       # 1,234 → 1234
+                r"−|–|–|—": "-",     # various dash/minus to hyphen‑minus
+                r"\(([^)]+)\)": r"-\1",       # (1,234) → -1234
+            }, regex=True)
+            .apply(pd.to_numeric, errors="coerce")
+    )
+
+    return df
 
 
 @asset(
@@ -230,27 +282,24 @@ def combine_years(context, download_aspep_year: dict) -> pd.DataFrame:
 
     for year, file_path in items:
         try:
-            engine = "openpyxl" if file_path.endswith(".xlsx") else "xlrd"
-            config = ASPEP_DATA_CONFIG.get(int(year), {})
+            year_int = int(year)
+            cfg = ASPEP_DATA_CONFIG.get(year_int, {})
+            read_kwargs = {"engine": "openpyxl" if file_path.endswith(".xlsx") else "xlrd"}
+            if cfg.get("sheet_name"):
+                read_kwargs["sheet_name"] = cfg["sheet_name"]
 
-            raw_df = pd.read_excel(file_path, engine=engine, header=None)
-            
-            # Extract column names using the header range
-            new_columns = extract_column_names(raw_df, config)
-            raw_df.columns = new_columns
-            
-            # Drop the header rows since we extracted column names from them
-            raw_df = raw_df.iloc[config["header_end"]:].reset_index(drop=True)
-            
-            # Drop any completely empty columns and column named ""
-            raw_df = raw_df.dropna(axis=1, how='all')
-            if "" in raw_df.columns:
-                raw_df = raw_df.drop(columns=[""])
+            # tidy‑header files (2024+) → header row at 0
+            read_kwargs["header"] = 0 if "header_start" not in cfg else None
 
-            # Map slugified columns to expected common names (if applicable)
-            raw_df.rename(columns=COLUMN_MAP, inplace=True)
-            
-            raw_df["year"] = int(year)
+            raw_df = pd.read_excel(file_path, **read_kwargs)
+
+            if year_int == 2024:
+                raw_df = api_based_extract_and_clean(raw_df, cfg)
+            else:
+                # legacy multi‑row header logic
+                raw_df = legacy_extract_and_clean(raw_df, cfg)
+
+            raw_df["year"] = year_int  # trust filename not sheet
             
             raw_df["gov_function"] = raw_df["gov_function"].str.strip().str.lower()
             raw_df["state"] = raw_df["state"].str.strip().str.lower()

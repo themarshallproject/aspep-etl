@@ -22,7 +22,8 @@ ASPEP_DATA_CONFIG = {
     2020: {"header_start": 12, "header_end": 14},
     2021: {"header_start": 12, "header_end": 14},
     2022: {"header_start": 12, "header_end": 14},
-    2023: {"header_start": 12, "header_end": 14}
+    2023: {"header_start": 12, "header_end": 14},
+    2024: {"sheet_name": "Data"},  # no header_* keys → tidy headers
 }
 
 COLUMN_MAP = {
@@ -42,6 +43,25 @@ COLUMN_MAP = {
     "total_march_payroll": "total_pay",
     "total_payroll": "total_pay",
 }
+
+NEW_COLUMN_MAP_2024 = {
+    "Geographic Area Name": "state",
+    "Meaning of Aggregate Description": "gov_function",
+    "Full-Time Employment": "ft_employment",
+    "Full-Time Payroll": "ft_pay",
+    "Part-Time Employment": "pt_employment",
+    "Part-Time Payroll": "pt_pay",
+    "Part-Time Hours": "pt_hours",
+    "Full-Time Equivalent Employment": "ft_eq_employment",
+    "Total Full-Time and Part-Time Employment": "ft_pt_employment",
+    "Total Full-Time and Part-Time Payroll": "total_pay",
+}
+
+NUMERIC_COLS_2024 = [
+    "ft_employment", "ft_pay", "pt_employment", "pt_pay", "pt_hours",
+    "ft_eq_employment", "ft_pt_employment", "total_pay",
+]
+
 
 GOV_FUNCTION_MAP = {
     "total":"total - all government employment functions",

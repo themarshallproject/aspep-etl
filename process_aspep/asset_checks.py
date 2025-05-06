@@ -10,7 +10,7 @@ def load_combined_data():
     return pd.DataFrame(data)
 
 # List of asset checks to generate
-CHECKS = [
+BASE_CHECKS = [
     ("WI", "corrections", 2017, "total_pay", 42_327_514),
     ("WI", "education - higher education instructional", 2021, "total_pay", 88_769_896),
     ("AR", "judicial and legal", 2022, "ft_pay", 8_001_374),
@@ -19,11 +19,13 @@ CHECKS = [
     ("IN", "police protection total", 2020, "ft_eq_employment", 1_820),
     ("US", "total - all government employment functions", 2019, "ft_pt_employment", 5_497_394),
     ("HI", "financial administration", 2018, "ft_employment", 692),
+    ("AZ", "electric power", 2024, "ft_employment", 4),
+    ("WA", "corrections", 2024, "ft_pay", 71_593_739),
 ]
 
 
 # Factory function to create asset checks
-def create_asset_check(state, gov_function, year, column, expected_value):
+def create_base_asset_check(state, gov_function, year, column, expected_value):
     """Generate an asset check function dynamically."""
     
     @asset_check(asset=combine_years, name=f"check_{state.lower().replace(' ', '_')}_{year}_{gov_function.replace(' ', '_').replace('-', '')}_{column}")
@@ -58,4 +60,4 @@ def create_asset_check(state, gov_function, year, column, expected_value):
     return check_fn
 
 # Dynamically create and register asset checks
-asset_checks = [create_asset_check(*params) for params in CHECKS]
+asset_checks = [create_base_asset_check(*params) for params in BASE_CHECKS]
