@@ -384,12 +384,173 @@ def derive_stats(context, combine_years: pd.DataFrame) -> pd.DataFrame:
     
     return derived_data
 
+@asset(
+    description="Extend pay metrics with YoY deltas and ranks (directional only for delta columns)",
+    required_resource_keys={"output_paths"},
+    group_name="process",
+)
+def derive_extended_stats(context, derive_stats: pd.DataFrame) -> pd.DataFrame:
+    """Augments state‑level pay metrics with:
+    ▸ 1‑ & 5‑year % / absolute deltas for each numeric metric.
+    ▸ Standard *descending* ranks for the original positive‑only metrics.
+    ▸ Directional ranks (positive **desc**, negative **asc**) for the delta columns.
+
+    Ranks are computed within (year, gov_function) cohorts so states are compared to contemporaries in the
+    same functional category.
+    """
+
+    # ────────────────────────────────────────────────────────────
+    # 1. Prep & typing
+    # ────────────────────────────────────────────────────────────
+    data = derive_stats.copy()
+
+    base_numeric_cols = [
+        "total_pay",
+        "ft_eq_employment",
+        "pt_pay",
+        "pt_hour",
+        "ft_pay",
+        "ft_employment",
+        "pay_per_fte",
+        "pay_per_pt_hour",
+        "pay_per_ft",
+    ]
+    for col in base_numeric_cols:
+        data[col] = pd.to_numeric(data[col], errors="coerce")
+
+    exclude_cols = [
+        "index",
+        "state",
+        "gov_function",
+        "state code",
+        "region",
+        "division",
+        "state_scope",
+        "year",
+    ]
+    base_stat_cols = [
+        c for c in data.columns if c not in exclude_cols and pd.api.types.is_numeric_dtype(data[c])
+    ]
+
+    # ────────────────────────────────────────────────────────────
+    # 2. Compute YoY deltas per (state, gov_function)
+    # ────────────────────────────────────────────────────────────
+    delta_suffixes = ["_1yr_pct", "_5yr_pct", "_1yr_abs", "_5yr_abs"]
+    frames = []
+    for (state_code, gov_fn), grp in data.groupby(["state code", "gov_function"]):
+        grp = grp.sort_values("year").copy()
+        for col in base_stat_cols:
+            grp[f"{col}_1yr_pct"] = grp[col].pct_change(1)
+            grp[f"{col}_5yr_pct"] = grp[col].pct_change(4)
+            grp[f"{col}_1yr_abs"] = grp[col].diff(1)
+            grp[f"{col}_5yr_abs"] = grp[col].diff(4)
+        frames.append(grp)
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # Identify delta columns now present
+    delta_cols = [c for c in df.columns if any(c.endswith(sfx) for sfx in delta_suffixes)]
+
+    # ────────────────────────────────────────────────────────────
+    # 3. Rankings
+    # ────────────────────────────────────────────────────────────
+    rank_keys = ["year", "gov_function"]
+
+    # 3a. Standard ranks for the original metrics (descending → 1 is max)
+    for col in base_stat_cols:
+        df[f"{col}_rank"] = df.groupby(rank_keys)[col].rank(method="min", ascending=False)
+
+    # 3b. Directional ranks for delta metrics
+    for col in delta_cols:
+        df[f"{col}_pos_rank"] = (
+            df.where(df[col] > 0)
+            .groupby(rank_keys)[col]
+            .rank(method="min", ascending=False)
+        )
+        df[f"{col}_neg_rank"] = (
+            df.where(df[col] < 0)
+            .groupby(rank_keys)[col]
+            .rank(method="min", ascending=True)
+        )
+
+    # ────────────────────────────────────────────────────────────
+    # 4. Optional filter – drop rows with trivial numerical data
+    # ────────────────────────────────────────────────────────────
+    filter_threshold = 1  # could be overridden via op config
+    df = df[df.select_dtypes(include=[np.number]).abs().max(axis=1) > filter_threshold]
+
+    # ────────────────────────────────────────────────────────────
+    # 5. Persist
+    # ────────────────────────────────────────────────────────────
+    out_path = context.resources.output_paths["extended_stats"]
+    df.to_json(out_path, orient="records", indent=4)
+
+    context.log.info(f"Extended stats written to {out_path}")
+    context.add_output_metadata({"output_json": out_path})
+
+    return df
+
+# @asset(
+#     description="Extend pay metrics with percentiles, rankings, and year-over-year changes.",
+#     required_resource_keys={"output_paths"},
+#     group_name="process",
+# )
+# def derive_extended_stats(context, derive_stats: pd.DataFrame) -> pd.DataFrame:
+#     extended_data = derive_stats.copy()
+
+#     # Ensure numeric columns are properly typed
+#     numeric_cols = ["total_pay", "ft_eq_employment", "pt_pay", "pt_hour", "ft_pay", "ft_employment",
+#                     "pay_per_fte", "pay_per_pt_hour", "pay_per_ft"]
+
+#     for col in numeric_cols:
+#         extended_data[col] = pd.to_numeric(extended_data[col], errors='coerce')
+
+#     # Identify strictly numeric columns for statistics
+#     exclude_cols = ['index', 'state', 'gov_function', 'state code', 'region', 'division', 'state_scope', 'year']
+#     stat_columns = [col for col in extended_data.columns if col not in exclude_cols and pd.api.types.is_numeric_dtype(extended_data[col])]
+
+#     # Compute year-over-year changes (1-year and 5-year)
+#     yoy_dfs = []
+#     for (state, gov_function), group in extended_data.groupby(["state code", "gov_function"]):
+#         group = group.sort_values("year").copy()
+
+#         for col in stat_columns:
+#             group[f"{col}_1yr_pct"] = group[col].pct_change(1)
+#             group[f"{col}_5yr_pct"] = group[col].pct_change(4)
+#             group[f"{col}_1yr_abs"] = group[col].diff(1)
+#             group[f"{col}_5yr_abs"] = group[col].diff(4)
+
+#         yoy_dfs.append(group)
+
+#     yoy_data = pd.concat(yoy_dfs, ignore_index=True)
+
+#     # Filter out rows where all numeric values are zero or below a threshold
+#     # filter_threshold = context.op_config.get("filter_threshold", 1)
+#     filter_threshold = 1
+#     numeric_columns = yoy_data.select_dtypes(include=[np.number])
+#     yoy_data = yoy_data[(numeric_columns.abs().max(axis=1) > filter_threshold)]
+
+#     # Append stats to the dataset
+#     final_data = pd.concat([yoy_data, rank_stats, ntile_stats], ignore_index=True)
+
+#     output_json = context.resources.output_paths["extended_stats"]
+
+#     final_data.to_json(output_json, orient="records", lines=False, indent=4)
+
+#     context.log.info(f"Extended stats written to {output_json}")
+#     context.add_output_metadata({
+#         "output_json": output_json,
+#     })
+
+#     return final_data
+
+
 
 @asset(
     required_resource_keys={"s3"},
     description="Upload all files from 'data/out' to a public s3 bucket.",
     group_name="process",
-    deps=[combine_years, derive_stats]
+    deps=[combine_years, derive_stats, derive_extended_stats]
 )
 def s3_upload(context: AssetExecutionContext) -> Output[list]:
     uploaded_files = []
